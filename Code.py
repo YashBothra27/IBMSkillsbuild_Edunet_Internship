@@ -41,7 +41,7 @@ def add_to_history(action, details):
     st.session_state['history'].insert(0, f"{action} - {details}")
 
 # 4. MODEL CONFIGURATION
-AVAILABLE_MODELS = ["gemini-2.5-flash"] 
+AVAILABLE_MODELS = ["gemini-1.5-flash,gemini-1.5-pro", "gemini-pro"] 
 @st.cache_data(show_spinner=False)
 def get_gemini_response(prompt):
     errors = []

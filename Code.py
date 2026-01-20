@@ -14,7 +14,7 @@ from io import BytesIO
 import re
 
 # 1. PAGE CONFIGURATION (MUST BE FIRST STREAMLIT COMMAND)
-st.set_page_config(page_title="ResumAI", layout="wide")
+st.set_page_config(page_title="ResumAI", layout="wide", page_icon="🚀")
 
 # 2. Load Environment Variables
 load_dotenv()
@@ -37,19 +37,29 @@ if 'resume_data' not in st.session_state:
         'experience': '',
         'projects': ''
     }
+
 def add_to_history(action, details):
     st.session_state['history'].insert(0, f"{action} - {details}")
 
-# 4. MODEL CONFIGURATION
-AVAILABLE_MODELS = ["gemini-1.5-flash,gemini-1.5-pro", "gemini-pro"] 
-@st.cache_data(show_spinner=False)
-def get_gemini_response(prompt):
+# 4. OPTIMIZED AI CONFIGURATION (Streaming + 1.5 Flash)
+# We prioritize the fastest model and enable streaming
+AVAILABLE_MODELS = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"] 
+
+def get_gemini_response(prompt, stream=False):
+    """
+    Tries models in order of speed. 
+    If 'stream=True', returns a generator for real-time typing effect.
+    """
     errors = []
     for model_name in AVAILABLE_MODELS:
         try:
             model = genai.GenerativeModel(model_name)
-            response = model.generate_content(prompt)
-            return response.text
+            if stream:
+                # Return the stream object directly
+                return model.generate_content(prompt, stream=True)
+            else:
+                # Return full text for non-streaming needs
+                return model.generate_content(prompt).text
         except Exception as e:
             errors.append(f"{model_name} failed: {str(e)}")
             continue
@@ -292,6 +302,8 @@ def generate_portfolio_html(name, role, bio, projects, email, linkedin, github):
 # 5. Interface Layout
 with st.sidebar:
     st.title("ResumAI Controls")
+    st.success("⚡ Speed Mode: Enabled")
+    
     if st.button("🗑️ Reset All Data", type="primary"):
         for key in list(st.session_state.keys()):
             del st.session_state[key]
@@ -401,23 +413,39 @@ if selected_option == "Resume Builder":
 
             final_prompt = base_prompt + "\n" + style_instruction + "\nEnsure clear headings using ## for sections."
 
-            with st.spinner("ResumAI is crafting your resume..."):
-                ai_response = get_gemini_response(final_prompt)
-                st.subheader("Preview")
-                st.markdown(ai_response)
+            # --- STREAMING IMPLEMENTATION ---
+            st.subheader("Preview")
+            response_container = st.empty()
+            full_text = ""
+            
+            try:
+                stream_response = get_gemini_response(final_prompt, stream=True)
                 
-                pdf_file = create_pdf(ai_response)
-                
-                clean_name = re.sub(r'[^\w\s-]', '', name).strip().replace(' ', '_')
-                
-                st.download_button(
-                    label="Download Resume as PDF",
-                    data=pdf_file,
-                    file_name=f"{clean_name}_Resume.pdf",
-                    mime="application/pdf"
-                )
-                
-                add_to_history("Generated Resume", f"{name} ({resume_style})")
+                # Check if it failed and returned a string error
+                if isinstance(stream_response, str):
+                    st.error(stream_response)
+                else:
+                    for chunk in stream_response:
+                        full_text += chunk.text
+                        response_container.markdown(full_text + "▌")
+                    
+                    # Final clean display
+                    response_container.markdown(full_text)
+                    
+                    # Generate PDF after full text is ready
+                    pdf_file = create_pdf(full_text)
+                    clean_name = re.sub(r'[^\w\s-]', '', name).strip().replace(' ', '_')
+                    
+                    st.download_button(
+                        label="Download Resume as PDF",
+                        data=pdf_file,
+                        file_name=f"{clean_name}_Resume.pdf",
+                        mime="application/pdf"
+                    )
+                    add_to_history("Generated Resume", f"{name} ({resume_style})")
+                    
+            except Exception as e:
+                st.error(f"Error during generation: {e}")
         else:
             st.warning("Please fill in at least Name and Target Role.")
 
@@ -451,35 +479,45 @@ elif selected_option == "Portfolio Builder":
             </div>
             
             Strictly return ONLY the HTML code. Do NOT include markdown backticks.
-            """            
-            raw_response = get_gemini_response(project_prompt)
-            # FIX: Sanitize the response to remove ```html ... ```
-            formatted_projects = clean_ai_response(raw_response)
+            """
             
-            full_html = generate_portfolio_html(
-                p_name, p_role, p_bio, formatted_projects, 
-                st.session_state['resume_data']['email'], 
-                p_linkedin, p_github
-            )
+            # --- STREAMING IMPLEMENTATION FOR CODE ---
+            st.subheader("Generating Code...")
+            code_container = st.empty()
+            full_code = ""
             
-            st.success("Website Generated Successfully!")
-            
-            tab1, tab2 = st.tabs(["👀 Preview", "💻 View Code"])
-            
-            with tab1:
-                st.components.v1.html(full_html, height=500, scrolling=True)
-            
-            with tab2:
-                st.text("Copy this code into a file named 'index.html'")
-                st.code(full_html, language='html')
-
-            st.download_button(
-                label="📥 Download index.html",
-                data=full_html,
-                file_name="index.html",
-                mime="text/html"
-            )
-            add_to_history("Generated Portfolio", p_name)
+            try:
+                stream_response = get_gemini_response(project_prompt, stream=True)
+                
+                if isinstance(stream_response, str):
+                    st.error(stream_response)
+                else:
+                    for chunk in stream_response:
+                        full_code += chunk.text
+                        code_container.code(full_code + "▌", language='html')
+                    
+                    code_container.code(full_code, language='html')
+                    
+                    # Clean and Assemble
+                    formatted_projects = clean_ai_response(full_code)
+                    full_html = generate_portfolio_html(
+                        p_name, p_role, p_bio, formatted_projects, 
+                        st.session_state['resume_data']['email'], 
+                        p_linkedin, p_github
+                    )
+                    
+                    st.success("Website Generated Successfully!")
+                    st.components.v1.html(full_html, height=500, scrolling=True)
+                    
+                    st.download_button(
+                        label="📥 Download index.html",
+                        data=full_html,
+                        file_name="index.html",
+                        mime="text/html"
+                    )
+                    add_to_history("Generated Portfolio", p_name)
+            except Exception as e:
+                st.error(f"Error: {e}")
 
 elif selected_option == "Cover Letter Generator":
     st.header("✉️ Cover Letter Generator")
@@ -489,7 +527,6 @@ elif selected_option == "Cover Letter Generator":
     c_jd = st.text_area("Job Description Snippet")
     
     if st.button("Generate Cover Letter"):
-        # FIX: Prompt Updated to forbid placeholders
         prompt = f"""
         Write a professional cover letter for {c_name} to {c_company} for the role of {c_role}.
         JOB DESCRIPTION: {c_jd}
@@ -500,18 +537,34 @@ elif selected_option == "Cover Letter Generator":
         3. Use strictly the information provided. If a detail (like address) is missing, do not include that line.
         4. Sign off with the user's actual name: {c_name}.
         """
-        with st.spinner("Drafting letter..."):
-            letter = get_gemini_response(prompt)
-            st.markdown(letter)
+        
+        # --- STREAMING IMPLEMENTATION ---
+        st.subheader("Drafting Letter...")
+        letter_container = st.empty()
+        full_letter = ""
+        
+        try:
+            stream_response = get_gemini_response(prompt, stream=True)
             
-            pdf_file = create_pdf(letter)
-            st.download_button(
-                label="Download Cover Letter PDF",
-                data=pdf_file,
-                file_name="Cover_Letter.pdf",
-                mime="application/pdf"
-            )
-            add_to_history("Generated Cover Letter", c_company)
+            if isinstance(stream_response, str):
+                st.error(stream_response)
+            else:
+                for chunk in stream_response:
+                    full_letter += chunk.text
+                    letter_container.markdown(full_letter + "▌")
+                
+                letter_container.markdown(full_letter)
+                
+                pdf_file = create_pdf(full_letter)
+                st.download_button(
+                    label="Download Cover Letter PDF",
+                    data=pdf_file,
+                    file_name="Cover_Letter.pdf",
+                    mime="application/pdf"
+                )
+                add_to_history("Generated Cover Letter", c_company)
+        except Exception as e:
+            st.error(f"Error: {e}")
 
 elif selected_option == "ATS Scanner":
     st.header("🔍 ATS Scanner")
@@ -522,32 +575,46 @@ elif selected_option == "ATS Scanner":
     
     if st.button("Scan Resume"):
         if uploaded_file and ats_jd:
-            with st.spinner("Scanning..."):
+            with st.spinner("Analyzing..."):
+                # 1. Math Analysis (Fast)
                 resume_text = extract_text_from_pdf(uploaded_file)
                 score = calculate_ats_score(resume_text, ats_jd)
-                
-                feedback_prompt = f"""
-                Analyze this resume against the JD.
-                Resume: {resume_text}
-                JD: {ats_jd}
-                Provide: 1. Missing Keywords 2. Improvement Tips.
-                """
-                ai_feedback = get_gemini_response(feedback_prompt)
                 
                 col_a, col_b = st.columns([1, 2])
                 with col_a:
                     st.metric("ATS Match Score", f"{score}%")
                 with col_b:
                     if score < 50:
-                        st.error("Low Match")
+                        st.error("Low Match - Needs Work")
                     elif score < 75:
-                        st.warning("Average Match")
+                        st.warning("Average Match - Optimize Keywords")
                     else:
-                        st.success("High Match")
+                        st.success("High Match - Ready to Apply")
                 
+                # 2. AI Feedback (Streaming)
                 st.subheader("AI Analysis")
-                st.write(ai_feedback)
+                feedback_prompt = f"""
+                Analyze this resume against the JD.
+                Resume: {resume_text}
+                JD: {ats_jd}
+                Provide: 1. Missing Keywords 2. Improvement Tips.
+                """
                 
-                add_to_history("ATS Scan Performed", f"Score: {score}%")
+                feedback_container = st.empty()
+                full_feedback = ""
+                
+                try:
+                    stream_response = get_gemini_response(feedback_prompt, stream=True)
+                    if isinstance(stream_response, str):
+                        st.error(stream_response)
+                    else:
+                        for chunk in stream_response:
+                            full_feedback += chunk.text
+                            feedback_container.write(full_feedback + "▌")
+                        feedback_container.write(full_feedback)
+                        
+                        add_to_history("ATS Scan Performed", f"Score: {score}%")
+                except Exception as e:
+                    st.error(f"AI Error: {e}")
         else:
             st.error("Please upload a file and provide a JD.")

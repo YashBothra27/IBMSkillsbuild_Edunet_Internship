@@ -1,0 +1,9 @@
+# Security (CRITICAL)
+.env
+
+# Python generated files
+__pycache__/
+*.pyc
+
+# System files
+.DS_Store

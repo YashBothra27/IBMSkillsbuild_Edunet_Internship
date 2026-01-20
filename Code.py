@@ -42,6 +42,7 @@ def add_to_history(action, details):
 
 # 4. MODEL CONFIGURATION
 AVAILABLE_MODELS = ["gemini-2.5-flash"] 
+@st.cache_data(show_spinner=False)
 def get_gemini_response(prompt):
     errors = []
     for model_name in AVAILABLE_MODELS:

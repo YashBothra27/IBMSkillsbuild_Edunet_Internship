@@ -1,10 +1,9 @@
 import streamlit as st
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 import os
 from dotenv import load_dotenv
 import PyPDF2 as pdf
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
 from reportlab.lib.pagesizes import LETTER
 from reportlab.pdfgen import canvas
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -18,8 +17,21 @@ st.set_page_config(page_title="ResumAI", layout="wide", page_icon="🚀")
 
 # 2. Load Environment Variables
 load_dotenv()
-genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+@st.cache_resource
+def get_gemini_client():
+    api_key = os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        try:
+            api_key = st.secrets["GOOGLE_API_KEY"]
+        except (KeyError, FileNotFoundError):
+            st.error("🚨 API Key missing! Set GOOGLE_API_KEY in .env or secrets.toml")
+            st.stop()
+    return genai.Client(
+        api_key=api_key,
+        http_options=types.HttpOptions(api_version="v1") 
+    )
 
+client = get_gemini_client()
 # 3. Setup Session State (Single Initialization)
 if 'history' not in st.session_state:
     st.session_state['history'] = []
@@ -41,25 +53,24 @@ if 'resume_data' not in st.session_state:
 def add_to_history(action, details):
     st.session_state['history'].insert(0, f"{action} - {details}")
 
-# 4. OPTIMIZED AI CONFIGURATION (Streaming + 1.5 Flash)
-# We prioritize the fastest model and enable streaming
-AVAILABLE_MODELS = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"] 
-
+# 4. OPTIMIZED AI CONFIGURATION
+AVAILABLE_MODELS = ["gemini-2.0-flash"]
 def get_gemini_response(prompt, stream=False):
-    """
-    Tries models in order of speed. 
-    If 'stream=True', returns a generator for real-time typing effect.
-    """
+
     errors = []
     for model_name in AVAILABLE_MODELS:
         try:
-            model = genai.GenerativeModel(model_name)
             if stream:
-                # Return the stream object directly
-                return model.generate_content(prompt, stream=True)
+                return client.models.generate_content_stream(
+                    model=model_name,
+                    contents=prompt
+                )
             else:
-                # Return full text for non-streaming needs
-                return model.generate_content(prompt).text
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt
+                )
+                return response.text
         except Exception as e:
             errors.append(f"{model_name} failed: {str(e)}")
             continue
@@ -576,6 +587,8 @@ elif selected_option == "ATS Scanner":
     if st.button("Scan Resume"):
         if uploaded_file and ats_jd:
             with st.spinner("Analyzing..."):
+                from sklearn.feature_extraction.text import TfidfVectorizer
+                from sklearn.metrics.pairwise import cosine_similarity
                 # 1. Math Analysis (Fast)
                 resume_text = extract_text_from_pdf(uploaded_file)
                 score = calculate_ats_score(resume_text, ats_jd)
